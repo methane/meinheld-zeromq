@@ -2,7 +2,7 @@
 meinheld-zeromq
 ================
 
-This library wraps pyzmq to make it compatible with gevent. ØMQ socket
+This library wraps pyzmq to make it compatible with meinheld. ØMQ socket
 operations that would normally block the current thread will only block the
 current greenlet instead.
 
