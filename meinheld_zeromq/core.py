@@ -32,10 +32,10 @@ class GreenSocket(Socket):
         self._fd = self.getsockopt(zmq.FD)
 
     def _wait_write(self):
-        trampoline(self._fd, False, True, 1)
+        trampoline(self._fd, False, True)
 
     def _wait_read(self):
-        trampoline(self._fd, True, False, 1)
+        trampoline(self._fd, True, False)
 
     def send(self, data, flags=0, copy=True, track=False):
         # if we're given the NOBLOCK flag act as normal and let the EAGAIN get raised
