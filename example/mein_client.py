@@ -10,14 +10,12 @@ def sleep(secs):
     main_greenlet.switch()
 
 def pingpong():
-    def run():
-        sock = ctx.socket(zmq.REQ)
-        sock.connect('tcp://127.0.0.1:10000')
-        while True:
-            sleep(1)
-            sock.send(b'hello')
-            print sock.recv()
-    meinheld.spawn(run)
+    sock = ctx.socket(zmq.REQ)
+    sock.connect('tcp://127.0.0.1:10000')
+    while True:
+        sleep(1)
+        sock.send(b'hello')
+        print sock.recv()
 
 def dummy_app(env, start):
     sock = ctx.socket(zmq.REQ)
