@@ -27,7 +27,7 @@ zmq.Socket = zmq.GreenSocket
 zmq.Context = zmq.GreenContext
 Socket = zmq.GreenSocket
 Context = zmq.GreenContext
-Poller = GreenPoller
+#Poller = GreenPoller
 
 def monkey_patch():
     """

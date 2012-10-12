@@ -5,7 +5,7 @@ from zmq import *
 from zmq import devices
 __all__ = zmq.__all__
 
-import meinheld
+from meinheld.server import trampoline
 
 
 class GreenSocket(Socket):
@@ -28,78 +28,19 @@ class GreenSocket(Socket):
     def __init__(self, context, socket_type):
         self.__in_send_multipart = False
         self.__in_recv_multipart = False
-        self.__setup_events()
-
-    def __del__(self):
-        self.close()
-
-    def close(self, linger=None):
-        super(GreenSocket, self).close(linger)
-        self.__cleanup_events()
-
-    def __cleanup_events(self):
-        # close the _state_event event, keeps the number of active file descriptors down
-        if getattr(self, '_state_event', None):
-            try:
-                self._state_event.stop()
-            except AttributeError, e:
-                # gevent<1.0 compat
-                self._state_event.cancel()
-
-        # if the socket has entered a close state resume any waiting greenlets
-        if hasattr(self, '__writable'):
-            self.__writable.set()
-            self.__readable.set()
-
-    def __setup_events(self):
-        self.__readable = AsyncResult()
-        self.__writable = AsyncResult()
-        try:
-            self._state_event = get_hub().loop.io(self.getsockopt(FD), 1) # read state watcher
-            self._state_event.start(self.__state_changed)
-        except AttributeError:
-            # for gevent<1.0 compatibility
-            from gevent.core import read_event
-            self._state_event = read_event(self.getsockopt(FD), self.__state_changed, persist=True)
-
-    def __state_changed(self, event=None, _evtype=None):
-        if self.closed:
-            self.__cleanup_events()
-            return
-        try:
-            events = super(GreenSocket, self).getsockopt(zmq.EVENTS)
-        except ZMQError, exc:
-            self.__writable.set_exception(exc)
-            self.__readable.set_exception(exc)
-        else:
-            if events & zmq.POLLOUT:
-                self.__writable.set()
-            if events & zmq.POLLIN:
-                self.__readable.set()
+        super(GreenSocket, self).__init__(context, socket_type)
+        self._fd = self.getsockopt(zmq.FD)
 
     def _wait_write(self):
-        self.__writable = AsyncResult()
-        try:
-            self.__writable.get(timeout=1)
-        except gevent.Timeout:
-            self.__writable.set()
+        trampoline(self._fd, False, True, 1)
 
     def _wait_read(self):
-        self.__readable = AsyncResult()
-        try:
-            self.__readable.get(timeout=1)
-        except gevent.Timeout:
-            self.__readable.set()
+        trampoline(self._fd, True, False, 1)
 
     def send(self, data, flags=0, copy=True, track=False):
         # if we're given the NOBLOCK flag act as normal and let the EAGAIN get raised
         if flags & zmq.NOBLOCK:
-            try:
-                msg = super(GreenSocket, self).send(data, flags, copy, track)
-            finally:
-                if not self.__in_send_multipart:
-                    self.__state_changed()
-            return msg
+            return super(GreenSocket, self).send(data, flags, copy, track)
 
         # ensure the zmq.NOBLOCK flag is part of flags
         flags |= zmq.NOBLOCK
@@ -111,17 +52,12 @@ class GreenSocket(Socket):
                 # if the raised ZMQError is not EAGAIN, reraise
                 if e.errno != zmq.EAGAIN:
                     raise
-            # defer to the event loop until we're notified the socket is writable
-            self._wait_write()
+                # defer to the event loop until we're notified the socket is writable
+                self._wait_write()
 
     def recv(self, flags=0, copy=True, track=False):
         if flags & zmq.NOBLOCK:
-            try:
-                msg = super(GreenSocket, self).recv(flags, copy, track)
-            finally:
-                if not self.__in_recv_multipart:
-                    self.__state_changed()
-            return msg
+            return super(GreenSocket, self).recv(flags, copy, track)
 
         flags |= zmq.NOBLOCK
         while True:
@@ -129,34 +65,8 @@ class GreenSocket(Socket):
                 return super(GreenSocket, self).recv(flags, copy, track)
             except zmq.ZMQError, e:
                 if e.errno != zmq.EAGAIN:
-                    if not self.__in_recv_multipart:
-                        self.__state_changed()
                     raise
-            else:
-                if not self.__in_recv_multipart:
-                    self.__state_changed()
-                return msg
-            self._wait_read()
-
-    def send_multipart(self, *args, **kwargs):
-        """wrap send_multipart to prevent state_changed on each partial send"""
-        self.__in_send_multipart = True
-        try:
-            msg = super(GreenSocket, self).send_multipart(*args, **kwargs)
-        finally:
-            self.__in_send_multipart = False
-            self.__state_changed()
-        return msg
-
-    def recv_multipart(self, *args, **kwargs):
-        """wrap recv_multipart to prevent state_changed on each partial recv"""
-        self.__in_recv_multipart = True
-        try:
-            msg = super(GreenSocket, self).recv_multipart(*args, **kwargs)
-        finally:
-            self.__in_recv_multipart = False
-            self.__state_changed()
-        return msg
+                self._wait_read()
 
 
 class GreenContext(Context):
