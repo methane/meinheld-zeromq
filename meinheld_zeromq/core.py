@@ -2,7 +2,6 @@
 """
 import zmq
 from zmq import *
-from zmq import devices
 __all__ = zmq.__all__
 
 from meinheld.server import trampoline
@@ -26,8 +25,6 @@ class GreenSocket(Socket):
     """
 
     def __init__(self, context, socket_type):
-        self.__in_send_multipart = False
-        self.__in_recv_multipart = False
         super(GreenSocket, self).__init__(context, socket_type)
         self._fd = self.getsockopt(zmq.FD)
 
