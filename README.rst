@@ -1,6 +1,6 @@
-=============
-gevent-zeromq
-=============
+================
+meinheld-zeromq
+================
 
 This library wraps pyzmq to make it compatible with gevent. ØMQ socket
 operations that would normally block the current thread will only block the
@@ -10,7 +10,7 @@ Requirements
 ------------
 
 * pyzmq==2.2.0
-* gevent (compatible with 1.0 pre-releases as well)
+* meinheld
 
 
 Usage
@@ -20,7 +20,7 @@ Instead of importing zmq directly, do so in the following manner:
 
 ..
     
-    from gevent_zeromq import zmq
+    from meinheld_zeromq import zmq
 
 
 Any calls that would have blocked the current thread will now only block the

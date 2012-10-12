@@ -5,16 +5,10 @@ from zmq import *
 from zmq import devices
 __all__ = zmq.__all__
 
-import gevent
-from gevent import select
-from gevent.event import AsyncResult
-from gevent.hub import get_hub
-
-from zmq.core.context cimport Context as _Context
-from zmq.core.socket cimport Socket as _Socket
+import meinheld
 
 
-cdef class GreenSocket(_Socket):
+class GreenSocket(Socket):
     """Green version of :class:`zmq.core.socket.Socket`
 
     The following methods are overridden:
@@ -27,20 +21,11 @@ cdef class GreenSocket(_Socket):
     To ensure that the ``zmq.NOBLOCK`` flag is set and that sending or recieving
     is deferred to the hub if a ``zmq.EAGAIN`` (retry) error is raised.
     
-    The `__state_changed` method is triggered when the zmq.FD for the socket is
-    marked as readable and triggers the necessary read and write events (which
-    are waited for in the recv and send methods).
-
     Some double underscore prefixes are used to minimize pollution of
     :class:`zmq.core.socket.Socket`'s namespace.
     """
-    cdef object __readable
-    cdef object __writable
-    cdef object __in_send_mulitpart
-    cdef object __in_recv_mulitpart
-    cdef public object _state_event
 
-    def __init__(self, context, int socket_type):
+    def __init__(self, context, socket_type):
         self.__in_send_multipart = False
         self.__in_recv_multipart = False
         self.__setup_events()
@@ -78,62 +63,79 @@ cdef class GreenSocket(_Socket):
             self._state_event = read_event(self.getsockopt(FD), self.__state_changed, persist=True)
 
     def __state_changed(self, event=None, _evtype=None):
-        cdef int events
         if self.closed:
             self.__cleanup_events()
             return
         try:
-            events = super(GreenSocket, self).getsockopt(EVENTS)
+            events = super(GreenSocket, self).getsockopt(zmq.EVENTS)
         except ZMQError, exc:
             self.__writable.set_exception(exc)
             self.__readable.set_exception(exc)
         else:
-            if events & POLLOUT:
+            if events & zmq.POLLOUT:
                 self.__writable.set()
-            if events & POLLIN:
+            if events & zmq.POLLIN:
                 self.__readable.set()
 
-    cdef _wait_write(self) with gil:
+    def _wait_write(self):
         self.__writable = AsyncResult()
         try:
             self.__writable.get(timeout=1)
         except gevent.Timeout:
             self.__writable.set()
 
-    cdef _wait_read(self) with gil:
+    def _wait_read(self):
         self.__readable = AsyncResult()
         try:
             self.__readable.get(timeout=1)
         except gevent.Timeout:
             self.__readable.set()
 
-    cpdef object send(self, object data, int flags=0, copy=True, track=False):
+    def send(self, data, flags=0, copy=True, track=False):
         # if we're given the NOBLOCK flag act as normal and let the EAGAIN get raised
-        if flags & NOBLOCK:
-            return _Socket.send(self, data, flags, copy, track)
+        if flags & zmq.NOBLOCK:
+            try:
+                msg = super(GreenSocket, self).send(data, flags, copy, track)
+            finally:
+                if not self.__in_send_multipart:
+                    self.__state_changed()
+            return msg
+
         # ensure the zmq.NOBLOCK flag is part of flags
-        flags = flags | NOBLOCK
+        flags |= zmq.NOBLOCK
         while True: # Attempt to complete this operation indefinitely, blocking the current greenlet
             try:
                 # attempt the actual call
-                return _Socket.send(self, data, flags, copy, track)
-            except ZMQError, e:
+                return super(GreenSocket, self).send(data, flags, copy, track)
+            except zmq.ZMQError, e:
                 # if the raised ZMQError is not EAGAIN, reraise
-                if e.errno != EAGAIN:
+                if e.errno != zmq.EAGAIN:
                     raise
             # defer to the event loop until we're notified the socket is writable
             self._wait_write()
 
-    cpdef object recv(self, int flags=0, copy=True, track=False):
-        if flags & NOBLOCK:
-            return _Socket.recv(self, flags, copy, track)
-        flags = flags | NOBLOCK
+    def recv(self, flags=0, copy=True, track=False):
+        if flags & zmq.NOBLOCK:
+            try:
+                msg = super(GreenSocket, self).recv(flags, copy, track)
+            finally:
+                if not self.__in_recv_multipart:
+                    self.__state_changed()
+            return msg
+
+        flags |= zmq.NOBLOCK
         while True:
             try:
-                return _Socket.recv(self, flags, copy, track)
-            except ZMQError, e:
-                if e.errno != EAGAIN:
+                return super(GreenSocket, self).recv(flags, copy, track)
+            except zmq.ZMQError, e:
+                if e.errno != zmq.EAGAIN:
+                    if not self.__in_recv_multipart:
+                        self.__state_changed()
                     raise
+            else:
+                if not self.__in_recv_multipart:
+                    self.__state_changed()
+                return msg
             self._wait_read()
 
     def send_multipart(self, *args, **kwargs):
@@ -157,9 +159,10 @@ cdef class GreenSocket(_Socket):
         return msg
 
 
-class GreenContext(_Context):
+class GreenContext(Context):
     """Replacement for :class:`zmq.core.context.Context`
 
-    Ensures that the greened Socket below is used in calls to `socket`.
+    Ensures that the greened Socket above is used in calls to `socket`.
     """
     _socket_class = GreenSocket
+
